@@ -86,7 +86,8 @@ arguments = {
 	'mwa2_pass': {
 		'parser_flags': ('-p', '--mwa2-password'),
 		'parser_kwargs': {
-			'help': 'password for mwa2 api calls, read from stdin if not provided',
+			'help': 'password for mwa2 api calls, read from stdin if not'
+					'provided',
 			'dest': 'mwa2_pass',
 			'required': False},
 		'key': 'MWA2_Password',
@@ -95,7 +96,8 @@ arguments = {
 	'path': {
 		'parser_flags': ('-P', '--clients-path'),
 		'parser_kwargs': {
-			'help': 'relative directory path to client manifest files on the munki repo',
+			'help': 'relative directory path to client manifest files on the'
+					'munki repo',
 			'dest': 'path',
 			'required': False},
 		'key': 'RepoClientsPath',
@@ -128,7 +130,8 @@ arguments = {
 	'role': {
 		'parser_flags': ('-r', '--role'),
 		'parser_kwargs': {
-			'help': 'inclided manifest file the client should use for software updates',
+			'help': 'inclided manifest file the client should use for software'
+					'updates',
 			'dest': 'role',
 			'required': True}
 	},
@@ -144,7 +147,8 @@ arguments = {
 	'role_dirs': {
 		'parser_flags': ('-r', '--role-directories'),
 		'parser_kwargs': {
-			'help': 'list of relative paths to manifests suitable for use as "included manifests"',
+			'help': 'list of relative paths to manifests suitable for use as'
+					'"included manifests"',
 			'dest': 'role_dirs',
 			'required': False},
 		'key': 'RepoIncludedManifestsPaths',
@@ -178,15 +182,19 @@ errors = {
 	22: ( 'hostname error',
 		'Hostname too long. DNS hostnames must be 15 characters or less.'),
 	23: ( 'hostname error',
-		'Hostname contains illegal character. Use alphanumerics and hyphens only.'),
+		'Hostname contains illegal character. Use alphanumerics and hyphens'
+		'only.'),
 	31: ( 'server error',
-		'Server rejected the connection. Make sure the MWA2 service is running.'),
+		'Server rejected the connection. Make sure the MWA2 service is'
+		'running.'),
 	32: ( 'server error',
 		'Server request unauthorized. Check username and password.'),
 	33: ( 'server error',
-		'Client manifest creation request failed. The requested manifest alredy exists.'),
+		'Client manifest creation request failed. The requested manifest alredy'
+		'exists.'),
 	34: ( 'update error',
-		 'You are trying to update a client that does not exist on the server.'),
+		 'You are trying to update a client that does not exist on the'
+		 'server.'),
 	41: ( 'network error',
 		'Error sending the request to the server: {}'),
 	51: ( 'rename error',
@@ -224,7 +232,8 @@ def getPreference(pref):
 	Return a preference value. Checks the application plist first, then
 	falls back to internal defaults.
 	"""
-	logging.debug("Looking up missing argument from application preferences: {}".format(pref))
+	logging.debug("Looking up missing argument from application preferences: "
+					"{}".format(pref))
 	if pref == 'mwa2_pass' and __name__ == '__main__':
 		return getpass.getpass()
 	return app_plist.get(
@@ -308,6 +317,28 @@ def serverPost(uri, auth, headers, json):
 	return None
 
 
+def serverPatch(uri, auth, headers, json):
+	"""
+	Make a PATCH request against a mwa2 server to replace one or more keys 
+	returning the result as JSON or None
+	"""
+	try:
+		request = requests.patch(uri, auth=auth, headers=headers, json=json)
+	except requests.exceptions.RequestException as e:
+		logging.error("Server connection error: {}".format(e))
+		onError(41, e)
+	if request.status_code == 200 or request.status_code == 201:
+		logging.debug("Server post successful: {}".format(request.json()))
+		return request.json()
+	elif request.status_code == 401:
+		logging.error("Server returned HTTP 401 unauthorized.")
+		onError(32)
+	elif request.status_code == 409:
+		logging.error("Server returned HTTP 409 resource conflict.")
+		onError(33)
+	return None
+
+
 def getClient(server, mwa2_user, mwa2_pass, headers, path, ext):
 	"""
 	Requests a client manifest from a MWA2 server that may or may not exist.
@@ -333,14 +364,17 @@ def getRoles(server, mwa2_user, mwa2_pass, headers, role_dirs):
 	logging.debug('getRoles args: {}'.format(locals()))
 	credentials = (mwa2_user, mwa2_pass)
 	roles = {}
-	request = serverGet(server, credentials, headers, {'api_fields': 'filename'})
+	request = serverGet(server, credentials, headers,
+						{'api_fields': 'filename'})
 	if request is not None:
 		logging.debug("Received roles from server: {}".format(request))
 		matches = [i['filename'] for i in request if any(
 			[True for filter in role_dirs if i['filename'].startswith(filter)])]
-		logging.debug("Manifests matching config path filters: {}".format(matches))
+		logging.debug("Manifests matching config path filters: "
+						"{}".format(matches))
 		for manifest in matches:
-			logging.debug("Requesting role manifest from the server: {}".format(manifest))
+			logging.debug("Requesting role manifest from the server: "
+							"{}".format(manifest))
 			uri = server + '/' + manifest
 			roles[manifest] = serverGet(uri, credentials, headers)
 	return roles
@@ -372,26 +406,28 @@ def createClient(server, mwa2_user, mwa2_pass , headers, path, ext,
 	return None
 
 
-def updateClient(server, mwa2_user, mwa2_pass, headers, path, ext, user, hostname):
-	# needs refactor
+def updateClient(server, mwa2_user, mwa2_pass, headers, path, ext, user, 
+					hostname):
 	"""
 	Updates hostname or username fields for a client manifest on a MWA2
 	server.
 	"""
 	logging.debug('updateClient args: {}'.format(locals()))
 	client = getClient(server=server, mwa2_user=mwa2_user, mwa2_pass=mwa2_pass,
-					   headers=headers, path=path, ext=ext)
+						headers=headers, path=path, ext=ext)
 	if not client[0]:
 		onError(34)
-	data = client[0]
+	data = {}
 	if user:
-		data["user"] = args.user
+		data["user"] = user
 	if hostname:
 		checkHostname(hostname)
-		data["hostname"] = args.hostname
+		data["hostname"] = hostname
+	logging.debug("New client keys: {}".format(data))
 	clientId = getClientId()
-	uri = args.server + '/' + clientId
-	request = serverPost(uri, credentials, headers, data)
+	uri = server + '/' + clientId
+	request = serverPatch(uri=uri, auth=(mwa2_user, mwa2_pass), headers=headers,
+							json=data)
 	return request
 
 
@@ -442,7 +478,8 @@ def reboot():
 	"""
 	removeLaunchAgent()
 	if getPreference('munki_installatstartup'):
-		f = open('/Users/Shared/.com.googlecode.munki.checkandinstallatstartup', 'w')
+		f = open('/Users/Shared/.com.googlecode.munki.checkandinstallatstartup', 
+					'w')
 		f.close()
 	time.sleep(5)
 	dummy_retcode = subprocess.call(['/sbin/shutdown', '-r', 'now'])
@@ -462,35 +499,29 @@ def handleArguments():
 						version='%(prog)s ' + version)
 	
 	parser_gc = subparsers.add_parser('get-client', help=sub_help['get-client'])
-	for arg in (
-			'server', 'mwa2_user', 'mwa2_pass', 'headers', 'ext',
-			'path'):
-		parser_gc.add_argument(
-							   *arguments[arg]['parser_flags'],
-							   **arguments[arg]['parser_kwargs'])
+	for arg in ('server', 'mwa2_user', 'mwa2_pass', 'headers', 'ext', 'path'):
+		parser_gc.add_argument(*arguments[arg]['parser_flags'],
+								**arguments[arg]['parser_kwargs'])
 	parser_gc.set_defaults(func=getClient)
 	
 	parser_gr = subparsers.add_parser('get-roles', help=sub_help['get-roles'])
 	for arg in ('server', 'mwa2_user', 'mwa2_pass', 'headers', 'role_dirs'):
-		parser_gr.add_argument(
-			*arguments[arg]['parser_flags'],
-			**arguments[arg]['parser_kwargs'])
+		parser_gr.add_argument(*arguments[arg]['parser_flags'],
+								**arguments[arg]['parser_kwargs'])
 	parser_gr.set_defaults(func=getRoles)
 	
 	parser_c = subparsers.add_parser('create', help=sub_help['create'])
-	for arg in (
-			'server', 'mwa2_user', 'mwa2_pass', 'headers', 'ext',
-			'path', 'role', 'hostname', 'user', 'catalog', 'write_host'):
-		parser_c.add_argument(
-			*arguments[arg]['parser_flags'],
-			**arguments[arg]['parser_kwargs'])
+	for arg in ('server', 'mwa2_user', 'mwa2_pass', 'headers', 'ext', 'path', 
+				'role', 'hostname', 'user', 'catalog', 'write_host'):
+		parser_c.add_argument(*arguments[arg]['parser_flags'],
+								**arguments[arg]['parser_kwargs'])
 	parser_c.set_defaults(func=createClient)
 	
 	parser_u = subparsers.add_parser('update', help=sub_help['update'])
-	for arg in ('server', 'mwa2_user', 'mwa2_pass', 'headers', 'user', 'hostname'):
-		parser_u.add_argument(
-			*arguments[arg]['parser_flags'],
-			**arguments[arg]['parser_kwargs'])
+	for arg in ('server', 'mwa2_user', 'mwa2_pass', 'headers', 'user', 
+				'hostname', 'path', 'ext'):
+		parser_u.add_argument(*arguments[arg]['parser_flags'],
+								**arguments[arg]['parser_kwargs'])
 	parser_u.set_defaults(func=updateClient)
 	
 	args = parser.parse_args()
