@@ -6,7 +6,7 @@
 #  Created by mike on 10/26/15.
 #  Copyright (c) 2015 PowerHouse. All rights reserved.
 #
-'''Controller for the main window'''
+"""Controller for the main window"""
 
 from objc import YES, NO, IBAction, IBOutlet, nil
 from PyObjCTools import AppHelper
@@ -20,12 +20,12 @@ import enroll, sys
 
 
 class EmptyObj(object):
-	""" used for passing argument objects to enroll """
+	"""used for passing argument objects to enroll"""
 	pass
 
 
 class CustomWindow(NSWindow):
-	""" this is here so the window can become active """
+	"""this is here so the window can become active"""
 	def canBecomeKeyWindow(self):
 		return True
 
@@ -60,7 +60,7 @@ class MyWindowController(NSObject):
 	availableRoles = {}
 	client = {}
 	
-	# set enroll prefs not handled in getAppPrefs
+	# set enroll prefs not handled in munki.getAppPrefs
 	serial = None
 	identifier = None
 	user = None
@@ -73,6 +73,7 @@ class MyWindowController(NSObject):
 	
 	
 	def enlargeWindow(self):
+		"""expand app window to show manifest info"""
 		NSLog("Main window size: {}".format(self.window.frame().size))
 		winRect = self.window.frame()
 		winRect.size.height = 480
@@ -82,15 +83,18 @@ class MyWindowController(NSObject):
 	
 	
 	def collapseWindow(self):
+		"""collapse app window to hide manifest info"""
 		NSLog("Main window size: {}".format(self.window.frame().size))
 		winRect = self.window.frame()
 		winRect.size.height = 180
-		winRect.origin.y = winRect.origin.y + ( self.window.frame().size.height - 180 )
+		winRect.origin.y = winRect.origin.y + (
+				self.window.frame().size.height - 180 )
 		NSLog("Setting new main window size: {}".format(winRect))
 		self.window.setFrame_display_(winRect, True)
 	
 	
 	def userLoggedIn(self):
+		"""return true if a user is logged in to the console, else false"""
 		cfuser = SCDynamicStoreCopyConsoleUser(None, None, None)
 		if cfuser[0] == 'loginwindow' or cfuser[0] == None:
 			NSLog("No user logged in.")
@@ -100,7 +104,7 @@ class MyWindowController(NSObject):
 
 
 	def bringFrontCenter(self):
-		""" bring the app to the front so it shows over the login window """
+		"""bring the app to the front so it shows over the login window """
 		if self.window:
 			NSLog("window is present")
 			self.window.becomeMainWindow()
@@ -124,7 +128,7 @@ class MyWindowController(NSObject):
 
 	
 	def evalHostName(self):
-		""" check the provided hostname and allow enroll to proceed if it is valid """
+		"""display an error message if the hostname is invalid"""
 		try:
 			enroll.checkHostname(self.hostnameTxtFld.stringValue())
 			return True
@@ -134,6 +138,7 @@ class MyWindowController(NSObject):
 
 
 	def evalManifestSelection(self):
+		"""display an error message if a manifest is not selected"""
 		selection = self.manifestCmbBx.objectValueOfSelectedItem()
 		if not selection:
 			self.runErrorSheet("You must select a client manifest.")
@@ -142,7 +147,7 @@ class MyWindowController(NSObject):
 
 
 	def evalEnrollConditions(self):
-		""" allow user to procede to enroll if hostname and role are valid """
+		"""allow user to procede with enroll if hostname and role are valid"""
 		if self.evalManifestSelection() and self.evalHostName():
 			return True
 		else:
@@ -150,7 +155,10 @@ class MyWindowController(NSObject):
 
 
 	def onManifestSelected(self):
-		""" display the role manifest details in the text box when it is selected and note a valid selection has been made """
+		"""
+		display the role manifest details in the text box when it is selected
+		and note a valid selection has been made
+		"""
 		selection = self.manifestCmbBx.objectValueOfSelectedItem()
 		NSLog("You selected: {}".format(selection))
 		if selection:
@@ -160,7 +168,7 @@ class MyWindowController(NSObject):
 
 	@objc.signature('v@:')
 	def lookupClient(self):
-		""" notify the user a client lookup is in progress and begin lookup """
+		"""notify the user a client lookup is in progress and begin lookup"""
 		self.progressIndicator.startAnimation_(self)
 		try:
 			self.client, self.identifier = enroll.getClient(
@@ -177,14 +185,18 @@ class MyWindowController(NSObject):
 		else:
 			self.progressIndicator.stopAnimation_(self)
 			if self.client:
-				# the server returned a client, configure the computer with the client info returned
-				self.runErrorSheet("Enrolling with existing client manifest in the Munki repo...\nComputer will restart shortly.")
+				# the server returned a client, configure the computer with the
+				# client info returned
+				self.runErrorSheet("Client manifest matching serial found in "
+					"the Munki repo.\nComputer is enrolling and will restart "
+					"shortly.")
 				if 'hostname' in self.client:
 					self.hostname = self.client['hostname']
 				else:
 					self.hostname = self.identifier.split('/')[-1].split('.')[0]
-				#give enough time to read status text before proceding
-				NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(3.0, self, self.enrollUsingClient, None, False)
+				# give enough time to read status text before proceding
+				NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+						3.0, self, self.enrollUsingClient, None, False)
 			else:
 				# no existing clients, make one using the GUI
 				self.retryMode = 'roles'
@@ -194,7 +206,10 @@ class MyWindowController(NSObject):
 
 	@objc.signature('v@:')
 	def enrollUsingClient(self):
-		""" set the computer hostname and munki config using the existing client info """
+		"""
+		set the computer hostname and munki config using the existing client 
+		info
+		"""
 		try:
 			enroll.writeClientId(identifier=self.identifier)
 		except Exception as e:
@@ -205,12 +220,16 @@ class MyWindowController(NSObject):
 			except Exception as e:
 				self.runErrorSheet(str(e))
 			else:
-				NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(4.0, self, self.rebootMe, None, False)
+				NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+						4.0, self, self.rebootMe, None, False)
 
 
 	@objc.signature('v@:')
 	def rebootMe(self):
-		""" remove the enroll app LaunchAgent, set munki to run on startup and reboot """
+		"""
+		remove the enroll app LaunchAgent, set munki to run on startup and 
+		reboot
+		"""
 		try:
 			enroll.reboot()
 		except Exception as e:
@@ -224,7 +243,10 @@ class MyWindowController(NSObject):
 
 
 	def populateRoles(self):
-		""" request a dictionary of role manifests from the enroll server and add them to the combobox"""
+		"""
+		request a dictionary of role manifests from the enroll server and add 
+		them to the manifest selection combobox
+		"""
 		self.progressIndicator.startAnimation_(self)
 		try:
 			self.availableRoles = enroll.getRoles(
@@ -269,7 +291,8 @@ class MyWindowController(NSObject):
 			self.resetAndRetryEnroll()
 		else:
 			NSLog("Enrolled manifest file on server: {}".format(self.identifier))
-			NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(2.0, self, self.lookupClient, None, False)
+			NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+					2.0, self, self.lookupClient, None, False)
 
 
 	def updateClient(self):
@@ -290,7 +313,8 @@ class MyWindowController(NSObject):
 		self.retryMode = 'client'
 		self.clearRoles()
 		#give enough time to read status text before proceding
-		NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(4.0, self, self.initEnrollSession, None, False)
+		NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+				4.0, self, self.initEnrollSession, None, False)
 
 
 	def isEnrolled(self):
