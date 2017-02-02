@@ -16,12 +16,7 @@ from SystemConfiguration import SCDynamicStoreCopyConsoleUser
 
 from time import sleep
 
-import enroll, sys
-
-
-class EmptyObj(object):
-	"""used for passing argument objects to enroll"""
-	pass
+import enroll, sys, os
 
 
 class CustomWindow(NSWindow):
@@ -39,6 +34,7 @@ class MyWindowController(NSObject):
 	hostnameTxtFld = objc.IBOutlet()
 	enrollButton = objc.IBOutlet()
 	reloadButton = objc.IBOutlet()
+	clearIdButton = objc.IBOutlet()
 	# a combo box is used because pop up menus do not render at the login window
 	manifestCmbBx = objc.IBOutlet() 
 	credentialsButton = objc.IBOutlet()
@@ -61,11 +57,10 @@ class MyWindowController(NSObject):
 	client = {}
 	
 	# set enroll prefs not handled in munki.getAppPrefs
-	serial = None
+	serial = enroll.getSerial()
 	identifier = None
-	user = None
-	hostname = None
-	role = None
+	defaults = enroll.Defaults(enroll.bundle_id)
+	client_id = enroll.ClientId()
 	
 	
 	def awakeFromNib(self):
@@ -74,22 +69,22 @@ class MyWindowController(NSObject):
 	
 	def enlargeWindow(self):
 		"""expand app window to show manifest info"""
-		NSLog("Main window size: {}".format(self.window.frame().size))
+		#		NSLog("Main window size: {}".format(self.window.frame().size))
 		winRect = self.window.frame()
 		winRect.size.height = 480
 		winRect.origin.y = winRect.origin.y - 256
-		NSLog("Setting new main window size: {}".format(winRect))
+		#		NSLog("Setting new main window size: {}".format(winRect))
 		self.window.setFrame_display_(winRect, True)
 	
 	
 	def collapseWindow(self):
 		"""collapse app window to hide manifest info"""
-		NSLog("Main window size: {}".format(self.window.frame().size))
+		#		NSLog("Main window size: {}".format(self.window.frame().size))
 		winRect = self.window.frame()
 		winRect.size.height = 180
 		winRect.origin.y = winRect.origin.y + (
 				self.window.frame().size.height - 180 )
-		NSLog("Setting new main window size: {}".format(winRect))
+				#		NSLog("Setting new main window size: {}".format(winRect))
 		self.window.setFrame_display_(winRect, True)
 	
 	
@@ -101,6 +96,13 @@ class MyWindowController(NSObject):
 			return False
 		NSLog("{} is logged in and running the app.".format(cfuser[0]))
 		return True
+
+
+	def check_admin_needed(self):
+		if self.defaults.getPref('secure_munki_plist'):
+			if os.geteuid() != 0:
+				return True
+		return False
 
 
 	def bringFrontCenter(self):
@@ -115,16 +117,6 @@ class MyWindowController(NSObject):
 			self.authSheetWindow.setCanBecomeVisibleWithoutLogin_(True)
 			self.window.setLevel_(NSScreenSaverWindowLevel - 1)
 			self.window.orderFrontRegardless()
-	
-
-	def getAppPrefs(self):
-		for key in enroll.arguments.keys():
-			NSLog("Getting app defaults for key: {}".format(key))
-			if key not in ('hostname', 'user', 'role'):
-				setattr(self, key, enroll.getPreference(key))
-		self.serial = enroll.getSerial()
-		self.systemSerialLbl.setStringValue_(self.serial)
-		NSLog("Server: {}".format(self.server))
 
 	
 	def evalHostName(self):
@@ -171,69 +163,66 @@ class MyWindowController(NSObject):
 		"""notify the user a client lookup is in progress and begin lookup"""
 		self.progressIndicator.startAnimation_(self)
 		try:
-			self.client, self.identifier = enroll.getClient(
-				server=self.server,
-				headers=self.headers,
-				mwa2_user=self.mwa2_user,
-				mwa2_pass=self.mwa2_pass,
-				path=self.path,
-				ext=self.ext
-			)
+			path = self.defaults.getPref('path')
+			ext = self.defaults.getPref('ext')
+			self.client, self.identifier = self.server.getClient(path=path, ext=ext)
 		except Exception as e:
 			NSLog("Received error: {}".format(str(e)))
 			self.runErrorSheet("Error: {}".format(e))
 		else:
 			self.progressIndicator.stopAnimation_(self)
-			if self.client:
+			if self.client and (self.appMode == 'enroll'):
 				# the server returned a client, configure the computer with the
 				# client info returned
-				self.runErrorSheet("Client manifest matching serial found in "
-					"the Munki repo.\nComputer is enrolling and will restart "
-					"shortly.")
-				if 'hostname' in self.client:
-					self.hostname = self.client['hostname']
-				else:
-					self.hostname = self.identifier.split('/')[-1].split('.')[0]
+				self.runErrorSheet("Client manifest matching serial found in"
+								   " the Munki repo.\nSetting client ID locally"
+								   " to complete enroll.")
 				# give enough time to read status text before proceding
 				NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-						3.0, self, self.enrollUsingClient, None, False)
+					3.0, self, self.completeClientEnroll, None, False)
+			elif self.client and (self.appMode == 'update'):
+				self.hostnameTxtFld.setStringValue_(enroll.getCurrentHostname())
+				self.enrollButton.setEnabled_(True)
+				self.populateRoles()
 			else:
 				# no existing clients, make one using the GUI
+				self.hostnameTxtFld.setStringValue_(enroll.getCurrentHostname())
 				self.retryMode = 'roles'
 				self.enrollButton.setEnabled_(True)
 				self.populateRoles()
 
 
 	@objc.signature('v@:')
-	def enrollUsingClient(self):
+	def completeClientEnroll(self):
 		"""
-		set the computer hostname and munki config using the existing client 
-		info
+		set the computer hostname and munki config using the client info from  
+		the computer manifest
 		"""
 		try:
-			enroll.writeClientId(identifier=self.identifier)
+			self.client_id.write(identifier=self.identifier)
+			if 'display_name' in self.client:
+				enroll.setHostname(self.client['display_name'])
+			else:
+				enroll.setHostname(self.identifier.split('/')[-1].split('.')[0])
+			NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+					4.0, self, self.closeOut, None, False)
 		except Exception as e:
 			self.runErrorSheet(str(e))
-		else:
-			try:
-				enroll.setHostname(self.hostname)
-			except Exception as e:
-				self.runErrorSheet(str(e))
-			else:
-				NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-						4.0, self, self.rebootMe, None, False)
 
 
 	@objc.signature('v@:')
-	def rebootMe(self):
+	def closeOut(self):
 		"""
-		remove the enroll app LaunchAgent, set munki to run on startup and 
-		reboot
+		remove the enroll app LaunchAgent and set munki to run on startup
 		"""
 		try:
-			enroll.reboot()
+			enroll.removeLaunchAgent()
 		except Exception as e:
-			self.runErrorSheet("Error with final steps before reboot: {}".format(e))
+			self.runErrorSheet("Error removing EnrollGUI launch agent.".format(e))
+		if self.defaults.getPref('munki_installatstartup'):
+			try: enroll.runMunki()
+			except Exception as e:
+				self.runErrorSheet("Error setting Munki to start at login.".format(e))
 
 
 	def enableInputFields(self):
@@ -249,17 +238,12 @@ class MyWindowController(NSObject):
 		"""
 		self.progressIndicator.startAnimation_(self)
 		try:
-			self.availableRoles = enroll.getRoles(
-				server=self.server,
-				mwa2_user=self.mwa2_user,
-				mwa2_pass=self.mwa2_pass,
-				headers=self.headers,
-				role_dirs=self.role_dirs
-			)
+			role_dirs = self.defaults.getPref('role_dirs')
+			self.availableRoles = self.server.getRoles(role_dirs=role_dirs)
 			self.manifestCmbBx.addItemsWithObjectValues_(self.availableRoles.keys())
 			self.enableInputFields()
-		except:
-			self.runErrorSheet("Failed to get manifest roles from the server.")
+		except Exception as e:
+			self.runErrorSheet(str(e))
 		self.progressIndicator.stopAnimation_(self)
 		self.reloadButton.setEnabled_(True)
 			
@@ -268,22 +252,19 @@ class MyWindowController(NSObject):
 	# refactor me
 	#
 	def makeEnrollRequest(self):
-		self.role = self.manifestCmbBx.objectValueOfSelectedItem()
-		self.hostname = self.hostnameTxtFld.stringValue()
-		self.user = self.userTxtFld.stringValue()
 		try:
-			self.identifier = enroll.createClient(
-				server=self.server,
-				mwa2_user=self.mwa2_user,
-				mwa2_pass=self.mwa2_pass,
-				headers=self.headers,
-				path=self.path,
-				ext=self.ext,
-				user=self.user,
-				hostname=self.hostname,
-				role=self.role,
-				catalog=self.catalog,
-				write_host=self.write_host
+			path = self.defaults.getPref('path')
+			ext = self.defaults.getPref('ext')
+			catalog = self.defaults.getPref('catalog')
+			write_host = self.defaults.getPref('write_host')
+			self.identifier = self.server.createClient(
+				path=path,
+				ext=ext,
+				user=self.userTxtFld.stringValue(),
+				hostname=self.hostnameTxtFld.stringValue(),
+				role=self.manifestCmbBx.objectValueOfSelectedItem(),
+				catalog=catalog,
+				write_host=write_host
 			)
 			NSLog("\n\n\n{}\n\n\n".format(self.identifier))
 		except Exception as e:
@@ -297,8 +278,25 @@ class MyWindowController(NSObject):
 
 	def updateClient(self):
 		NSLog("Client update requested.")
-		pass
-
+		hostname = self.hostnameTxtFld.stringValue()
+		user = self.userTxtFld.stringValue()
+		path = self.defaults.getPref('path')
+		ext = self.defaults.getPref('ext')
+		try:
+			self.identifier = self.server.updateClient(
+				path=path,
+				ext=ext,
+				user=user,
+				hostname=hostname
+			)
+		except Exception as e:
+			self.runErrorSheet("Client update failed.\n{}".format(e.message))
+			self.resetAndRetryEnroll()
+		else:
+			if hostname:
+				enroll.setHostname(hostname)
+			self.runErrorSheet("Client update succeded.\n")
+			
 
 	def clearRoles(self):
 		self.availableRoles = {}
@@ -318,20 +316,21 @@ class MyWindowController(NSObject):
 
 
 	def isEnrolled(self):
-		clientID = enroll.getClientId()
-		NSLog("Client Identifier: {}".format(clientID))
-		return True if clientID else False
+		c_id = self.client_id.get()
+		NSLog("Client Identifier: {}".format(c_id))
+		return True if c_id else False
 
 
 	def controlTextDidEndEditing_(self, notification):
+		"""Useful for live evaluation of text fields"""
 		if notification.object() is self.hostnameTxtFld:
 			#NSLog("Hostname changed")
 			pass
 			#HostName = self.hostnameTxtFld.stringValue()
 			#self.evalHostName(HostName)
 		else:
-			#NSLog("User name changed")
-			pass
+			NSLog("User name changed")
+			#pass
 
 
 	@objc.IBAction
@@ -392,15 +391,27 @@ class MyWindowController(NSObject):
 	@objc.IBAction
 	def enroll_(self, sender):
 		NSLog("Enroll button clicked")
+		self.userTxtFld.resignFirstResponder()
 		if self.appMode == 'enroll':
 			if self.evalEnrollConditions():
-				#pass
 				self.lockdownButtons()
 				self.makeEnrollRequest()
 		else:
+			if self.hostnameTxtFld.stringValue():
+				if not self.evalHostName():
+					return
 			self.updateClient()
 
 
+	@objc.IBAction
+	def clearId_(self, sender):
+		NSLog("Clear ID button clicked")
+		self.clearIdButton.setEnabled_(False)
+		self.client_id.remove()
+		self.appMode = 'enroll'
+		self.runErrorSheet("Client Identifier cleared.\n")
+	
+	
 	def lockdownButtons(self):
 		self.userTxtFld.setEnabled_(False)
 		self.hostnameTxtFld.setEnabled_(False)
@@ -426,6 +437,19 @@ class MyWindowController(NSObject):
 		closeButton.setEnabled_(False)
 
 
+	def setupServer(self):
+		NSLog("Setting up server instance...")
+		uri = self.defaults.getPref('server')
+		headers = self.defaults.getPref('headers')
+		apisrv = enroll.MWA2API(uri=uri, headers=headers)
+		user = self.defaults.getPref('mwa2_user')
+		passw = self.defaults.getPref('mwa2_pass')
+		apisrv.setAuth(user=user, passw=passw)
+		self.server = enroll.MWA2Server()
+		self.server.setAPI(apisrv)
+		NSLog("Server instance setup done.")
+
+
 	def startApp(self):
 		self.window.setTitle_("Munki Enroll")
 		self.collapseWindow()
@@ -433,11 +457,20 @@ class MyWindowController(NSObject):
 			self.disableClose()
 			self.bringFrontCenter()
 			self.credentialsButton.setHidden_(True)
+			self.clearIdButton.setHidden_(True)
 		else:
 			self.authSheetLoginButton.setEnabled_(True)
-		self.getAppPrefs()
-		if self.isEnrolled():
-			self.enrollButton.setTitle_("Update")
-			self.appMode = 'update'
+		self.systemSerialLbl.setStringValue_(self.serial)
+		if self.check_admin_needed():
+			self.lockdownButtons()
+			self.runErrorSheet("Please run this app with root permissions.")
 		else:
+			self.setupServer()
+			if self.isEnrolled():
+				self.clearIdButton.setHidden_(False)
+				self.enrollButton.setTitle_("Update")
+				self.appMode = 'update'
+				self.clearIdButton.setEnabled_(True)
+			else:
+				self.clearIdButton.setEnabled_(False)
 			self.initEnrollSession()
